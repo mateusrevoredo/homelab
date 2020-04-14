@@ -1,0 +1,36 @@
+version: '3.3'
+services:
+  mongodb:
+    image: mongo
+    restart: unless-stopped
+    container_name: mongodb_nightscout
+    networks:
+      - mongodb
+    volumes:
+      - ${CONFIG_FOLDER}/mongodb/nightscout:/data/db 
+
+  nightscout:
+    image: mateusrevoredo/nightscout
+    container_name: nightscout
+    restart: unless-stopped
+    env_file:
+      - ./nightscout.env
+    networks:
+      - traefik
+      - mongodb
+    depends_on:
+      - mongodb
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.nightscout.rule=Host(`nightscout.${DOMAINNAME}`)"
+      - "traefik.http.routers.nightscout.entrypoints=https"
+      - "traefik.http.routers.nightscout.tls=true"
+      - "traefik.http.routers.nightscout.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.nightscout.loadbalancer.server.port=1337"
+
+networks:
+  traefik:
+    external:
+      name: traefik
+  mongodb:

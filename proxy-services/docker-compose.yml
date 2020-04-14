@@ -1,0 +1,99 @@
+version: '3.3'
+services:
+  vpn:
+    container_name: vpn-proxy-01
+    image: dperson/openvpn-client:latest
+    cap_add:
+      - net_admin # required to modify network interfaces
+    restart: unless-stopped
+    networks:
+      - openvpn-proxy-01
+    volumes:
+      - /dev/net:/dev/net:z # tun device
+      - ${CONFIG_FOLDER}/proxy-services/vpn:/vpn # OpenVPN configuration
+    security_opt:
+      - label:disable
+    command: '-f "" -r 10.0.0.0/16' # enable firewall and route local network traffic
+
+  socketproxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: socketproxy
+    restart: unless-stopped
+    networks:
+      - socketproxy
+    volumes:
+     - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CONTAINERS=1
+
+  traefik:
+      image: traefik
+      container_name: traefik
+      restart: unless-stopped
+      depends_on:
+        - socketproxy
+      environment:
+      - TZ=${TZ}
+      - CF_API_EMAIL=${CLOUDFLARE_EMAIL}
+      - CF_API_KEY=${CLOUDFLARE_GLOBAL_API_KEY}
+      networks:
+        - traefik
+        - socketproxy
+      ports:
+        - "80:80"
+        - "443:443"
+      volumes:
+        - ${CONFIG_FOLDER}/traefik:/etc/traefik
+      command:
+        - "--log.level=ERROR"
+        - "--api=true"
+        - "--api.dashboard=true"
+        - "--global.sendanonymoususage=false"
+        - "--serverstransport.insecureskipverify"
+        - "--entrypoints.http.address=:80"
+        - "--entrypoints.https.address=:443"
+        - "--providers.docker.exposedbydefault=false"
+        - "--providers.docker.network=traefik"
+        - "--providers.docker.endpoint=tcp://socketproxy:2375"
+        - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare"
+        - "--certificatesresolvers.letsencrypt.acme.email=${CLOUDFLARE_EMAIL}"
+        - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme.json"
+        # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik"
+        - "traefik.http.routers.traefik.entrypoints=https"
+        - "traefik.http.routers.traefik.tls=true"
+        - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.traefik.tls.domains[0].main=${DOMAINNAME}"
+        - "traefik.http.routers.traefik.tls.domains[0].sans=*.${DOMAINNAME}"
+        - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAINNAME}`)"
+        - "traefik.http.routers.traefik.middlewares=secureheaders, ipwhitelist"
+        - "traefik.http.routers.traefik.service=api@internal"
+        - "traefik.http.routers.http.entrypoints=http"
+        - "traefik.http.routers.http.rule=HostRegexp(`{catchall:.*}`)"
+        - "traefik.http.routers.http.middlewares=redirectscheme"
+        - "traefik.http.middlewares.redirectscheme.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirectscheme.redirectscheme.permanent=true"
+        - "traefik.http.middlewares.ipwhitelist.ipwhitelist.sourcerange=10.0.0.0/8"
+        - "traefik.http.middlewares.secureheaders.headers.stsSeconds=15552000"
+        - "traefik.http.middlewares.secureheaders.headers.framedeny=true"
+        - "traefik.http.middlewares.secureheaders.headers.sslForceHost=true"
+        - "traefik.http.middlewares.secureheaders.headers.sslRedirect=true"
+        - "traefik.http.middlewares.secureheaders.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.secureheaders.headers.browserXssFilter=true"
+        - "traefik.http.middlewares.secureheaders.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.secureheaders.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.secureheaders.headers.stsPreload=true"
+        - "traefik.http.middlewares.secureheaders.headers.customResponseHeaders.X-Robots-Tag=none"
+        - "traefik.http.middlewares.secureheaders.headers.customFrameOptionsValue=SAMEORIGIN"
+
+networks:
+  traefik:
+    external:
+      name: traefik
+  socketproxy:
+    external:
+      name: socketproxy
+  openvpn-proxy-01:
+    external: true

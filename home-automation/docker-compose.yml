@@ -1,0 +1,128 @@
+version: '3.3'
+services:
+  homeassistant:
+    image: homeassistant/home-assistant
+    container_name: homeassistant
+    depends_on:
+      - deconz
+      - mariadb
+    networks:
+      - traefik
+      - mariadb
+      - deconz
+      - homeassistant
+      - influxdb
+    environment:
+      - TZ=${TZ}
+    ports:
+      - 8060:8060
+    volumes:
+      - ${CONFIG_FOLDER}/homeassistant:/config # config files
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.homeassistant.rule=Host(`ha.${DOMAINNAME}`)"
+      - "traefik.http.routers.homeassistant.entrypoints=https"
+      - "traefik.http.routers.homeassistant.tls=true"
+      - "traefik.http.routers.homeassistant.middlewares=secureheaders"
+      - "traefik.http.services.homeassistant.loadbalancer.server.port=8123"
+
+  mariadb:
+    image: mariadb
+    container_name: mariadb_ha
+    restart: unless-stopped
+    networks:
+      - mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: homeassistant
+      MYSQL_USER: homeassistant
+      MYSQL_PASSWORD: ${HOME_ASSISTANT_MYSQL_PASSWORD}
+    volumes:
+      - ${CONFIG_FOLDER}/mariadb/homeassistant/data:/var/lib/mysql
+      - ${CONFIG_FOLDER}/mariadb/homeassistant/config:/etc/mysql/conf.d
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    depends_on:
+      - mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      PMA_HOST: mariadb
+      PMA_ABSOLUTE_URI: "https://pma.${DOMAINNAME}.com/"
+    restart: unless-stopped
+    volumes:
+      - ${CONFIG_FOLDER}/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php
+    networks:
+      - traefik
+      - mariadb
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.phpmyadmin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`ha.pma.${DOMAINNAME}`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=https"
+      - "traefik.http.routers.phpmyadmin.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+  deconz:
+    container_name: deconz
+    image: marthoc/deconz
+    restart: unless-stopped
+    networks:
+      - traefik
+      - deconz
+    environment:
+      DECONZ_WEB_PORT: 80
+      DECONZ_WS_PORT: 443
+      DECONZ_VNC_MODE: 0
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${CONFIG_FOLDER}/deconz:/root/.local/share/dresden-elektronik/deCONZ
+    devices:
+      - /dev/ttyACM0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.deconz.rule=Host(`deconz.${DOMAINNAME}`)"
+      - "traefik.http.routers.deconz.entrypoints=https"
+      - "traefik.http.routers.deconz.tls=true"
+      - "traefik.http.routers.deconz.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.deconz.loadbalancer.server.port=80"
+
+  nodered:
+    container_name: nodered
+    image: nodered/node-red
+    networks:
+      - traefik
+      - homeassistant
+    volumes:
+      - ${CONFIG_FOLDER}/nodered:/data
+    depends_on:
+      - homeassistant
+    environment:
+      - TZ=${TZ}
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.nodered.rule=Host(`nodered.${DOMAINNAME}`)"
+      - "traefik.http.routers.nodered.entrypoints=https"
+      - "traefik.http.routers.nodered.tls=true"
+      - "traefik.http.routers.nodered.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.nodered.loadbalancer.server.port=1880"
+
+networks:
+  traefik:
+    external:
+      name: traefik
+  influxdb:
+    external:
+      name: influxdb
+  mariadb:
+  deconz:
+  homeassistant:

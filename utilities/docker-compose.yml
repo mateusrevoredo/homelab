@@ -1,0 +1,138 @@
+version: '3.3'
+services:
+  cloudflare-ddns:
+    image: oznu/cloudflare-ddns:latest
+    container_name: cloudflare-ddns
+    environment:
+      - API_KEY=${CLOUDFLARE_ZONE_API_KEY}
+      - ZONE=${DOMAINNAME}
+      - SUBDOMAIN=ddns
+      - PROXIED=false
+    restart: unless-stopped
+
+  cloudflared:
+    container_name: cloudflared
+    image: visibilityspots/cloudflared:amd64
+    restart: unless-stopped
+    networks:
+      pihole:
+        ipv4_address: 172.16.0.2
+
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:latest
+    networks:
+      pihole:
+        ipv4_address: 172.16.0.3
+      traefik:
+    ports:
+      - 53:53/tcp
+      - 53:53/udp
+    environment:
+      - ServerIP=172.16.0.3
+      - TZ=${TZ}
+      - WEBPASSWORD=${PIHOLE_WEB_PASSWORD}
+      - DNS1='172.16.0.2#5054'
+      - DNS2=''
+      - IPv6=false
+      - DNSMASQ_LISTENING=all
+      - PROXY_LOCATION=pihole
+      - VIRTUAL_HOST=pihole.${DOMAINNAME}
+      - VIRTUAL_PORT=80
+    volumes:
+      - ${CONFIG_FOLDER}/pihole:/etc/pihole/
+      - ${CONFIG_FOLDER}/dnsmasq:/etc/dnsmasq.d/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.frontend.priority=1"
+      - "traefik.frontend.rule=HostRegexp:pihole.${DOMAINNAME},{catchall:.*}"
+      - "traefik.http.routers.pihole.rule=Host(`pihole.${DOMAINNAME}`)"
+      - "traefik.http.routers.pihole.entrypoints=https"
+      - "traefik.http.routers.pihole.tls=true"
+      - "traefik.http.routers.pihole.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.pihole.loadbalancer.server.port=80"
+    dns:
+      - 127.0.0.1
+      - 1.1.1.1
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+
+  unifi-controller:
+    image: linuxserver/unifi-controller
+    container_name: unifi-controller
+    networks:
+      - traefik
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ${CONFIG_FOLDER}/unifi:/config
+    ports:
+      - 3478:3478/udp
+      - 10001:10001/udp
+      - 8080:8080
+      - 8443:8443
+      - 8843:8843
+      - 8880:8880
+      - 6789:6789
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.unifi.rule=Host(`unifi.${DOMAINNAME}`)"
+      - "traefik.http.routers.unifi.entrypoints=https"
+      - "traefik.http.routers.unifi.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.unifi.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.unifi.loadbalancer.server.port=8443"
+      - "traefik.http.services.unifi.loadbalancer.server.scheme=https"
+
+  portainer:
+    container_name: portainer
+    image: portainer/portainer
+    command: -H unix:///var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - traefik
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_FOLDER}/portainer:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAINNAME}`)"
+      - "traefik.http.routers.portainer.entrypoints=https"
+      - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.routers.portainer.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+
+  duplicati:
+    container_name: duplicati
+    image: duplicati/duplicati
+    restart: unless-stopped
+    networks:
+      - traefik
+    volumes:
+      - ${CONFIG_FOLDER}/duplicati:/data
+      - ${CONFIG_FOLDER}:/shared/data 
+      - ${DOCKER_COMPOSE_FILES}:/shared/compose
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.duplicati.rule=Host(`duplicati.${DOMAINNAME}`)"
+      - "traefik.http.routers.duplicati.entrypoints=https"
+      - "traefik.http.routers.duplicati.tls=true"
+      - "traefik.http.routers.duplicati.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.duplicati.loadbalancer.server.port=8200"
+
+networks:
+  traefik:
+    external:
+      name: traefik
+  pihole:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.16.0.0/29

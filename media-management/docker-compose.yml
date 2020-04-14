@@ -1,0 +1,286 @@
+version: '3.3'
+services:
+  vpn:
+    container_name: vpn
+    image: dperson/openvpn-client:latest
+    cap_add:
+      - net_admin # required to modify network interfaces
+    restart: unless-stopped
+    networks:
+      - traefik
+    volumes:
+      - /dev/net:/dev/net:z # tun device
+      - ${CONFIG_FOLDER}/vpn:/vpn # OpenVPN configuration
+    security_opt:
+      - label:disable
+    command: '-f "" -r 10.0.0.0/16' # enable firewall and route local network traffic
+
+  deluge:
+    container_name: deluge
+    image: linuxserver/deluge:latest
+    restart: unless-stopped
+    network_mode: service:vpn # run on the vpn network
+    depends_on:
+      - vpn
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - ${DOWNLOADS_FOLDER}:/downloads # downloads folder
+      - ${CONFIG_FOLDER}/deluge:/config # config files
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.deluge.rule=Host(`deluge.${DOMAINNAME}`)"
+      - "traefik.http.routers.deluge.entrypoints=https"
+      - "traefik.http.routers.deluge.tls=true"
+      - "traefik.http.routers.deluge.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.deluge.loadbalancer.server.port=8112"
+
+  jackett:
+    container_name: jackett
+    image: linuxserver/jackett:latest
+    restart: unless-stopped
+    networks:
+      - traefik
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${DOWNLOADS_FOLDER}/torrent-blackhole:/downloads # place where to put .torrent files for manual download
+      - ${CONFIG_FOLDER}/jackett:/config # config files
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jackett.rule=Host(`jackett.${DOMAINNAME}`)"
+      - "traefik.http.routers.jackett.entrypoints=https"
+      - "traefik.http.routers.jackett.tls=true"
+      - "traefik.http.routers.jackett.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.jackett.loadbalancer.server.port=9117"
+
+  nzbget:
+    container_name: nzbget
+    image: linuxserver/nzbget:latest
+    restart: unless-stopped
+    network_mode: service:vpn # run on the vpn network
+    depends_on:
+      - vpn
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - ${DOWNLOADS_FOLDER}:/downloads # download folder
+      - ${CONFIG_FOLDER}/nzbget:/config # config files
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nzbget.rule=Host(`nzbget.${DOMAINNAME}`)"
+      - "traefik.http.routers.nzbget.entrypoints=https"
+      - "traefik.http.routers.nzbget.tls=true"
+      - "traefik.http.routers.nzbget.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.nzbget.loadbalancer.server.port=6789"
+
+  sonarr:
+    container_name: sonarr
+    image: linuxserver/sonarr:latest
+    restart: unless-stopped
+    depends_on:
+      - deluge
+      - nzbget
+    networks:
+      - traefik
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${CONFIG_FOLDER}/sonarr:/config # config files
+      - ${MEDIA_FOLDER}/tv:/tv # tv shows folder
+      - ${DOWNLOADS_FOLDER}:/downloads # download folder
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr.rule=Host(`sonarr.${DOMAINNAME}`)"
+      - "traefik.http.routers.sonarr.entrypoints=https"
+      - "traefik.http.routers.sonarr.tls=true"
+      - "traefik.http.routers.sonarr.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+
+  radarr:
+    container_name: radarr
+    image: linuxserver/radarr:latest
+    restart: unless-stopped
+    depends_on:
+      - deluge
+      - nzbget
+    networks:
+      - traefik
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${CONFIG_FOLDER}/radarr:/config # config files
+      - ${MEDIA_FOLDER}/movies:/movies # movies folder
+      - ${DOWNLOADS_FOLDER}:/downloads # download folder
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr.rule=Host(`radarr.${DOMAINNAME}`)"
+      - "traefik.http.routers.radarr.entrypoints=https"
+      - "traefik.http.routers.radarr.tls=true"
+      - "traefik.http.routers.radarr.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+
+  plex-server:
+    container_name: plex-server
+    image: plexinc/pms-docker
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ} # timezone, defined in .env
+      - PLEX_CLAIM=${PLEX_CLAIM_TOKEN}
+      - ADVERTISE_IP=${PLEX_ADVERTISE_IP}
+    networks:
+      - traefik
+    ports:
+      - 32400:32400/tcp
+      - 3005:3005/tcp
+      - 8324:8324/tcp
+      - 32469:32469/tcp
+      - 1900:1900/udp
+      - 32410:32410/udp
+      - 32412:32412/udp
+      - 32413:32413/udp
+      - 32414:32414/udp
+    volumes:
+      - ${CONFIG_FOLDER}/plex/db:/config # plex database
+      - ${CONFIG_FOLDER}/plex/transcode:/transcode # temp transcoded files
+      - ${MEDIA_FOLDER}:/data # media library
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plex.rule=Host(`plex.${DOMAINNAME}`)"
+      - "traefik.http.routers.plex.entrypoints=https"
+      - "traefik.http.routers.plex.tls=true"
+      - "traefik.http.routers.plex.middlewares=secureheaders"
+      - "traefik.http.services.plex.loadbalancer.server.port=32400"
+      - "traefik.http.services.plex.loadbalancer.server.scheme=https"
+
+  bazarr:
+    image: linuxserver/bazarr
+    container_name: bazarr
+    depends_on:
+      - vpn
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    networks:
+      - traefik
+    volumes:
+      - ${CONFIG_FOLDER}/bazarr:/config
+      - ${MEDIA_FOLDER}/movies:/movies
+      - ${MEDIA_FOLDER}/tv:/tv
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bazarr.rule=Host(`bazarr.${DOMAINNAME}`)"
+      - "traefik.http.routers.bazarr.entrypoints=https"
+      - "traefik.http.routers.bazarr.tls=true"
+      - "traefik.http.routers.bazarr.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+
+  ombi:
+    image: linuxserver/ombi
+    container_name: ombi
+    depends_on:
+      - radarr
+      - sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    networks:
+      - traefik
+    volumes:
+      - ${CONFIG_FOLDER}/ombi:/config
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ombi.rule=Host(`ombi.${DOMAINNAME}`)"
+      - "traefik.http.routers.ombi.entrypoints=https"
+      - "traefik.http.routers.ombi.tls=true"
+      - "traefik.http.routers.ombi.middlewares=secureheaders"
+      - "traefik.http.services.ombi.loadbalancer.server.port=3579"
+
+  tautulli:
+    image: linuxserver/tautulli
+    container_name: tautulli
+    depends_on:
+      - plex-server
+    networks:
+      - traefik
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_FOLDER}/tautulli:/config
+      - ${CONFIG_FOLDER}/plex/db/Library/Application Support/Plex Media Server/Logs:/logs:ro
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tautulli.rule=Host(`tautulli.${DOMAINNAME}`)"
+      - "traefik.http.routers.tautulli.entrypoints=https"
+      - "traefik.http.routers.tautulli.tls=true"
+      - "traefik.http.routers.tautulli.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.tautulli.loadbalancer.server.port=8181"
+
+  lazylibrarian:
+    image: linuxserver/lazylibrarian
+    container_name: lazylibrarian
+    depends_on:
+      - vpn
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    network_mode: service:vpn
+    volumes:
+      - ${CONFIG_FOLDER}/lazy-librarian:/config # config files
+      - ${MEDIA_FOLDER}/books:/books # books folder
+      - ${DOWNLOADS_FOLDER}:/downloads # download folder
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lazylibrarian.rule=Host(`lazylibrarian.${DOMAINNAME}`)"
+      - "traefik.http.routers.lazylibrarian.entrypoints=https"
+      - "traefik.http.routers.lazylibrarian.tls=true"
+      - "traefik.http.routers.lazylibrarian.middlewares=secureheaders, ipwhitelist"
+      - "traefik.http.services.lazylibrarian.loadbalancer.server.port=5299"
+
+  # hydra2:
+  #   image: linuxserver/hydra2
+  #   container_name: hydra2
+  #   networks:
+  #     - traefik
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - ${CONFIG_FOLDER}/hydra2:/config
+  #     - ${DOWNLOADS_FOLDER}:/downloads
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.hydra2.rule=Host(`hydra.${DOMAINNAME}`)"
+  #     - "traefik.http.routers.hydra2.entrypoints=https"
+  #     - "traefik.http.routers.hydra2.tls=true"
+  #     - "traefik.http.routers.hydra2.middlewares=secureheaders, ipwhitelist"
+  #     - "traefik.http.services.hydra2.loadbalancer.server.port=5076"
+
+networks:
+  traefik:
+    external:
+      name: traefik
